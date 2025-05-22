@@ -2,9 +2,14 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
 using AutoMapper;
 using UserRAPI.DTO;
 using UserRAPI.Models;
+using Microsoft.AspNetCore.Authorization;
 
 namespace UserRAPI.Controllers
 {
@@ -22,86 +27,81 @@ namespace UserRAPI.Controllers
         }
 
         [HttpPost("register")]
-        public async Task<IActionResult> RegisterUser([FromBody] UserforRegistrationDTO userForRegistration)
+        public async Task<IActionResult> Register([FromBody] UserforRegistrationDTO dto)
         {
-            if (userForRegistration is null)
-                return BadRequest();
-
-            var user = _mapper.Map<User>(userForRegistration);
-            var result = await _userManager.CreateAsync(user, userForRegistration.Password);
+            var user = _mapper.Map<User>(dto);
+            var result = await _userManager.CreateAsync(user, dto.Password);
 
             if (!result.Succeeded)
-            {
-                var errors = result.Errors.Select(e => e.Description);
-                return BadRequest(new RegistrationResponseDTO { Errors = errors });
-            }
+                return BadRequest(new { errors = result.Errors.Select(e => e.Description) });
 
             return StatusCode(201);
         }
 
-        // get api/accounts
+        [HttpPost("login")]
+        public async Task<IActionResult> Login([FromBody] UserforRegistrationDTO dto)
+        {
+            var user = await _userManager.FindByEmailAsync(dto.Email);
+            if (user == null || !await _userManager.CheckPasswordAsync(user, dto.Password))
+                return Unauthorized(new { message = "Credenciales inválidas" });
+
+            var claims = new[]
+            {
+                new Claim(ClaimTypes.NameIdentifier, user.Id),
+                new Claim(ClaimTypes.Email, user.Email),
+            };
+
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("clave-super-secreta"));
+            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+            var token = new JwtSecurityToken(
+                claims: claims,
+                expires: DateTime.UtcNow.AddHours(1),
+                signingCredentials: creds
+            );
+
+            return Ok(new { token = new JwtSecurityTokenHandler().WriteToken(token) });
+        }
+
+        [Authorize]
         [HttpGet("{id}")]
         public async Task<IActionResult> GetUserByID(string id)
         {
             var user = await _userManager.FindByIdAsync(id);
-            if (user == null)
-                return NotFound();
+            if (user == null) return NotFound();
 
-            return Ok(new {user.Id, user.FirstName, user.LastName, user.Email});
+            return Ok(new { user.Id, user.FirstName, user.LastName, user.Email });
         }
 
-        [HttpGet("getAll")]
-        public IActionResult GetAllUsers()
-        {
-            var users = _userManager.Users.Select(u => new {u.Id, u.FirstName, u.LastName, u.Email});
-            return Ok(users);
-        }
-
-        // Update user
+        [Authorize]
         [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateUser(string id, [FromBody] UserForUpdateDTO userForUpdate)
+        public async Task<IActionResult> UpdateUser(string id, [FromBody] UserForUpdateDTO dto)
         {
-            if (userForUpdate is null)
-                return BadRequest();
             var user = await _userManager.FindByIdAsync(id);
-            if (user == null)
-                return NotFound();
-            user.Email = userForUpdate.Email;
-            if (!string.IsNullOrWhiteSpace(userForUpdate.Password))
+            if (user == null) return NotFound();
+
+            user.Email = dto.Email;
+            if (!string.IsNullOrWhiteSpace(dto.Password))
             {
-                // 1. Generar un token de restablecimiento de contraseña
                 var token = await _userManager.GeneratePasswordResetTokenAsync(user);
-
-                // 2. Aplicar el nuevo password usando el token
-                var passwordResult = await _userManager.ResetPasswordAsync(user, token, userForUpdate.Password);
-
-                // 3. Manejar errores si falla
-                if (!passwordResult.Succeeded)
-                    return BadRequest(passwordResult.Errors.Select(e => e.Description));
+                var result = await _userManager.ResetPasswordAsync(user, token, dto.Password);
+                if (!result.Succeeded) return BadRequest(result.Errors.Select(e => e.Description));
             }
 
-            var result = await _userManager.UpdateAsync(user);
-            if (!result.Succeeded)
-            {
-                var errors = result.Errors.Select(e => e.Description);
-                return BadRequest(new RegistrationResponseDTO { Errors = errors });
-            }
+            await _userManager.UpdateAsync(user);
             return NoContent();
         }
 
-        // Delete user
+        [Authorize]
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteUser(string id)
         {
             var user = await _userManager.FindByIdAsync(id);
-            if (user == null)
-                return NotFound();
+            if (user == null) return NotFound();
+
             var result = await _userManager.DeleteAsync(user);
-            if (!result.Succeeded)
-            {
-                var errors = result.Errors.Select(e => e.Description);
-                return BadRequest(new RegistrationResponseDTO { Errors = errors });
-            }
+            if (!result.Succeeded) return BadRequest(result.Errors.Select(e => e.Description));
+
             return NoContent();
         }
     }
