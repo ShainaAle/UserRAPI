@@ -2,6 +2,8 @@ using UserRAPI;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
 using UserRAPI.Models;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -24,6 +26,20 @@ builder.Services.AddCors(options =>
     });
 });
 
+builder.Services.AddAuthentication("Bearer")
+    .AddJwtBearer("Bearer", options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = false,
+            ValidateAudience = false,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes("clave-super-secreta")) // misma clave que usaste para firmar
+        };
+    });
+
 builder.Services.AddControllers();
 
 var app = builder.Build();
@@ -33,6 +49,8 @@ app.UseHttpsRedirection();
 app.UseCors("AllowReactApp");
 
 app.UseAuthorization();
+
+app.UseAuthentication();
 
 app.MapControllers();
 
